@@ -10,13 +10,7 @@ import useAspectRatioFitting from './hooks/use-aspect-ratio-fitting.tsx';
 import useDeckState from './hooks/use-deck-state.tsx';
 import useLocationSync from './hooks/use-location-sync.tsx';
 import useMousetrap from './hooks/use-mousetrap.tsx';
-import { defaultTransition } from './transitions.tsx';
 
-export type SlideTransition = {
-  enter?: CSSProperties;
-  from?: CSSProperties;
-  leave?: CSSProperties;
-};
 
 type DeckContextType = {
   activeView: {
@@ -37,7 +31,7 @@ type DeckContextType = {
   slideCount: number;
   stepBackward(): void;
   stepForward(): void;
-  transition: SlideTransition;
+  transition: string;
 };
 
 export const DeckContext = createContext<DeckContextType>(null!);
@@ -58,14 +52,14 @@ export default function Deck({
   className,
   slides,
   style,
-  transition = defaultTransition,
+  transition = "none",
 }: {
   aspectRatio?: number;
   backdropStyle?: CSSProperties;
   className?: string;
   slides: ReadonlyArray<ReactNode>;
   style?: CSSProperties;
-  transition?: SlideTransition;
+  transition?: string;
 }) {
   const {
     activeView,

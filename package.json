@@ -45,5 +45,8 @@
     "test": "npm-run-all --parallel tsc:check vitest:run lint lint:format",
     "tsc:check": "tsc",
     "vitest:run": "vitest run"
+  },
+  "dependencies": {
+    "@nkzw/vite-plugin-remdx": "^0.8.0"
   }
 }

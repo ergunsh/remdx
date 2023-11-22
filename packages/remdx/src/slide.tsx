@@ -4,14 +4,17 @@ import {
   Suspense,
   useContext,
   useEffect,
-  useMemo,
-  useState,
 } from 'react';
-import { animated, useSpring } from 'react-spring';
+import { flushSync } from 'react-dom';
 import { useSwipeable } from 'react-swipeable';
-import { DeckContext, SlideTransition } from './deck.tsx';
-import { GOTO_FINAL_STEP } from './hooks/use-deck-state.tsx';
+import { DeckContext } from './deck.tsx';
 import { Transitions } from './transitions.tsx';
+import { GOTO_FINAL_STEP } from './hooks/use-deck-state.tsx';
+
+enum SlideDirection {
+  forwards,
+  backwards
+}
 
 export default function Slide({
   children,
@@ -20,7 +23,8 @@ export default function Slide({
   image,
   padding = 48,
   style,
-  transition: slideTransition = {},
+  previousTransition: previousTransitionName,
+  nextTransition: nextTransitionName,
 }: {
   children: ReactNode;
   className?: string;
@@ -28,7 +32,9 @@ export default function Slide({
   image?: string;
   padding?: string | number;
   style?: CSSProperties;
-  transition?: SlideTransition;
+  previousTransition?: string;
+  nextTransition?: string;
+  transition?: string;
 }): JSX.Element {
   const {
     activeView,
@@ -40,78 +46,78 @@ export default function Slide({
     pendingView,
     regressSlide,
     slideCount,
-    transition,
   } = useContext(DeckContext);
-
-  const mergedTransition = useMemo(() => {
-    if (slideTransition === Transitions.none) {
-      return slideTransition;
-    }
-    const result = { ...transition };
-    if ('from' in slideTransition) {
-      result.from = slideTransition.from;
-    }
-    if ('enter' in slideTransition) {
-      result.enter = slideTransition.enter;
-    }
-    if ('leave' in slideTransition) {
-      result.leave = slideTransition.leave;
-    }
-    return result;
-  }, [slideTransition, transition]);
 
   const isActive = activeView.slideIndex === id;
   const isPending = pendingView.slideIndex === id;
-  const slideIndex = id;
-  const [isPassed, isUpcoming] = (() => {
-    if (slideCount === 1) {
-      return [false, false];
-    }
-    if (slideCount === 2) {
-      return slideIndex === activeView.slideIndex
-        ? [false, false]
-        : slideIndex === 0
-        ? [true, false]
-        : [false, true];
-    }
-
-    const isWrappingForward =
-      slideIndex === slideCount - 1 && activeView.slideIndex === 0;
-    const isWrappingReverse =
-      slideIndex === 0 && activeView.slideIndex === slideCount - 1;
-    const isWrapping = isWrappingForward || isWrappingReverse;
-    const isPassed =
-      (!isWrapping && slideIndex < activeView.slideIndex) || isWrappingForward;
-    const isUpcoming =
-      (!isWrapping && slideIndex > activeView.slideIndex) || isWrappingReverse;
-    return [isPassed, isUpcoming];
-  })();
 
   const willEnter = !isActive && isPending;
   const willExit = isActive && !isPending;
   const slideWillChange = activeView.slideIndex !== pendingView.slideIndex;
   const stepWillChange = activeView.stepIndex !== pendingView.stepIndex;
-  const [animate, setAnimate] = useState(false);
 
   useEffect(() => {
     if (!isActive || !stepWillChange || slideWillChange) {
       return;
     }
 
+    let slideDirection: SlideDirection = SlideDirection.forwards;
     if (pendingView.stepIndex < 0) {
-      setAnimate(false);
-      regressSlide();
+      slideDirection = SlideDirection.backwards;
     } else if (pendingView.stepIndex > 0) {
-      setAnimate(true);
-      advanceSlide();
+      slideDirection = SlideDirection.forwards;
     } else if (pendingView.stepIndex === GOTO_FINAL_STEP) {
-      setAnimate(false);
-      commitTransition({
-        stepIndex: 0,
-      });
+      slideDirection = SlideDirection.forwards;
+    }
+
+    const updateState = () => {
+      if (pendingView.stepIndex < 0) {
+        regressSlide();
+      } else if (pendingView.stepIndex > 0) {
+        advanceSlide();
+      } else if (pendingView.stepIndex === GOTO_FINAL_STEP) {
+        commitTransition({
+          stepIndex: 0,
+        });
+      } else {
+        commitTransition();
+      }
+    }
+    
+    let transitionName: string;
+    if (slideDirection === SlideDirection.forwards) {
+      transitionName = nextTransitionName || "none";
     } else {
-      setAnimate(navigationDirection > 0);
-      commitTransition();
+      transitionName = previousTransitionName || "none";
+    }
+
+    if (!transitionName || transitionName === "none" || !(transitionName in Transitions)) {
+      updateState();
+    } else {
+      const addTransitionStyles = () => {
+        const transition = Transitions[transitionName];
+        const transitionStylesheet = new CSSStyleSheet();
+        transitionStylesheet.replaceSync(`
+          ${transition.keyframes}
+          ${slideDirection === SlideDirection.forwards ? transition.forwards : transition.backwards}
+        `);
+        
+        document.adoptedStyleSheets = [transitionStylesheet];
+  
+        return () => {
+          document.adoptedStyleSheets = [];
+        }
+      };
+  
+      const removeTransitionStyles = addTransitionStyles();
+      // @ts-ignore
+      const documentTransition = document.startViewTransition(() => {
+        flushSync(() => updateState());
+      });
+  
+      documentTransition.finished.then(() => {
+        removeTransitionStyles?.();
+      });
     }
   }, [
     advanceSlide,
@@ -133,8 +139,6 @@ export default function Slide({
       pendingView.slideIndex > slideCount - 1
     ) {
       cancelTransition();
-    } else {
-      setAnimate(navigationDirection > 0);
     }
   }, [
     cancelTransition,
@@ -150,13 +154,10 @@ export default function Slide({
     }
 
     if (pendingView.stepIndex === GOTO_FINAL_STEP) {
-      setAnimate(false);
       commitTransition({
         stepIndex: 0,
       });
     } else {
-      const isSingleForwardStep = navigationDirection > 0;
-      setAnimate(isSingleForwardStep);
       commitTransition();
     }
   }, [
@@ -167,45 +168,18 @@ export default function Slide({
     willEnter,
   ]);
 
-  const target = useMemo(() => {
-    if (isPassed) {
-      return [mergedTransition.leave, { display: 'none' }];
-    }
-    if (isActive) {
-      return {
-        ...mergedTransition.enter,
-        display: 'unset',
-      };
-    }
-    if (isUpcoming) {
-      return {
-        ...mergedTransition.from,
-        display: 'none',
-      };
-    }
-    return {
-      display: 'none',
-    };
-  }, [isPassed, isActive, isUpcoming, mergedTransition]);
-
-  const immediate = !animate;
-  const springFrameStyle = useSpring({
-    immediate,
-    to: target,
-  });
   const swipeHandler = useSwipeable({
     onSwiped: (eventData) => onSwiped(eventData),
   });
 
   return (
-    <animated.div
+    <div
       style={{
         background: 'transparent',
         height: '100%',
         position: 'absolute',
         width: '100%',
-        ...springFrameStyle,
-        ...(isActive && { display: 'unset' }),
+        ...(isActive ? { display: 'unset' } : { display: 'none' }),
       }}
     >
       <div
@@ -237,6 +211,6 @@ export default function Slide({
           <Suspense>{children}</Suspense>
         </div>
       </div>
-    </animated.div>
+    </div>
   );
 }
